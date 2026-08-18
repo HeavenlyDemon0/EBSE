@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSimulation } from "../../context/SimulationContext";
 import {
-  CheckCircle2, XCircle, AlertCircle, ChevronRight,
-  HelpCircle, ChevronDown, Loader2, ExternalLink
+  CheckCircle2, XCircle, ChevronRight,
+  HelpCircle, ChevronDown, Loader2, ExternalLink, Play, Pause
 } from "lucide-react";
 import { DemoController } from "../demo/DemoController";
 import { HypothesisDrawer } from "../ui/HypothesisDrawer";
+import { ReasoningTraceDrawer } from "../ui/ReasoningTraceDrawer";
+import { FalsificationPanel } from "../ui/FalsificationPanel";
 import { Tooltip } from "../ui/Tooltip";
 import type { Hypothesis } from "../../types";
 
-// ─── Mini attack path for hypothesis card ────────────────────────────────────
 const MiniAttackPath: React.FC<{ steps: Hypothesis["steps"] }> = ({ steps }) => (
   <div className="flex items-center gap-1 flex-wrap mt-2">
     {steps.map((step, i) => (
@@ -30,7 +31,6 @@ const MiniAttackPath: React.FC<{ steps: Hypothesis["steps"] }> = ({ steps }) => 
   </div>
 );
 
-// ─── Evidence Debt "Why?" expandable ─────────────────────────────────────────
 const DebtBreakdown: React.FC<{ debt: number; show: boolean }> = ({ debt, show }) => {
   if (!show) return null;
   const missing = Math.round(debt * 0.42);
@@ -39,12 +39,12 @@ const DebtBreakdown: React.FC<{ debt: number; show: boolean }> = ({ debt, show }
   const contradictions = debt - missing - delayed - unverified;
   return (
     <div className="mt-3 border-t border-cyber-border/40 pt-3 space-y-1.5 animate-drop-in">
-      <div className="font-mono text-[9px] text-cyber-muted uppercase tracking-wider mb-2">WHY {debt}?</div>
+      <div className="font-mono text-[9px] text-cyber-muted uppercase tracking-wider mb-2">WHY DEBT IS {debt}?</div>
       {[
-        { label: "Missing events", value: missing, color: "text-cyber-red-text" },
-        { label: "Delayed telemetry", value: delayed, color: "text-cyber-amber-text" },
-        { label: "Unverified relationships", value: unverified, color: "text-cyber-amber-text" },
-        { label: "Contradictions", value: contradictions, color: "text-cyber-red-text" },
+        { label: "Missing telemetry events", value: missing, color: "text-cyber-red-text" },
+        { label: "Delayed stream buffers", value: delayed, color: "text-cyber-amber-text" },
+        { label: "Unverified logical inferences", value: unverified, color: "text-cyber-amber-text" },
+        { label: "Contradictory evidence", value: contradictions, color: "text-cyber-red-text" },
       ].map(item => (
         <div key={item.label} className="flex items-center justify-between font-mono text-[10px]">
           <span className="text-cyber-muted">{item.label}</span>
@@ -55,7 +55,6 @@ const DebtBreakdown: React.FC<{ debt: number; show: boolean }> = ({ debt, show }
   );
 };
 
-// ─── Main Dashboard ───────────────────────────────────────────────────────────
 export const Dashboard: React.FC = () => {
   const {
     state,
@@ -63,71 +62,43 @@ export const Dashboard: React.FC = () => {
     setTelemetryIntegrity,
     investigateLog,
     isSimulatingInvestigation,
+    togglePauseStream,
+    clearLiveBuffer,
+    openReasoningTrace
   } = useSimulation();
 
   const [drawerHyp, setDrawerHyp] = useState<Hypothesis | null>(null);
   const [showDebtBreakdown, setShowDebtBreakdown] = useState(false);
-  const [liveCollapsed, setLiveCollapsed] = useState(true);
-  const [tickerLogs, setTickerLogs] = useState<Array<{ id: number; time: string; type: string; text: string; isAlert: boolean }>>([]);
-  const tickerIdRef = useRef(0);
 
   const prevDebt = useRef(state.evidenceDebt);
   const [debtFlash, setDebtFlash] = useState(false);
 
-  // Flash debt when it changes
   useEffect(() => {
     if (prevDebt.current !== state.evidenceDebt) {
       setDebtFlash(true);
       setTimeout(() => setDebtFlash(false), 700);
       prevDebt.current = state.evidenceDebt;
-      // Auto-collapse breakdown on change
       setShowDebtBreakdown(false);
     }
   }, [state.evidenceDebt]);
 
-  // Live ticker
-  useEffect(() => {
-    const seed = [
-      { type: "AUTH", text: "WS-041 → VPN auth session verified", isAlert: false },
-      { type: "NET",  text: "WS-041 → LOG-SRV-12 SMB packet observed", isAlert: false },
-      { type: "PROC", text: "PowerShell execution detected on LOG-SRV-12", isAlert: true },
-      { type: "SYS",  text: "Telemetry link degradation on subnet MIL-LOG-07", isAlert: true },
-      { type: "ENGINE", text: "Hypothesis confidence recalculated", isAlert: false },
-    ];
-    setTickerLogs(seed.map((s, i) => ({ id: i, time: new Date().toISOString().slice(11, 19), ...s })));
-    tickerIdRef.current = seed.length;
-
-    const extras = [
-      { type: "NET",    text: "GATEWAY-01 session packet received", isAlert: false },
-      { type: "AUTH",   text: "svc_logistics token validated", isAlert: false },
-      { type: "SYS",    text: "Telemetry buffer queue: normal", isAlert: false },
-      { type: "ENGINE", text: "Evidence debt recalculated", isAlert: false },
-    ];
-    const interval = setInterval(() => {
-      const pick = extras[Math.floor(Math.random() * extras.length)];
-      setTickerLogs(prev => [{ id: tickerIdRef.current++, time: new Date().toISOString().slice(11,19), ...pick }, ...prev.slice(0, 6)]);
-    }, 4500);
-    return () => clearInterval(interval);
-  }, []);
-
-  // ── Derived values ──
+  // Derived metrics
   const debt = state.evidenceDebt;
   const completeness = state.evidenceCompleteness;
   const isResolved = state.investigatedLogs.length > 0;
   const atLoss = state.telemetryIntegrity === 40;
 
   const barColor = state.telemetryIntegrity >= 90 ? "bg-cyber-green" : state.telemetryIntegrity >= 60 ? "bg-cyber-amber" : "bg-cyber-red";
-  const telLabel = state.telemetryIntegrity >= 90 ? "COMPLETE" : state.telemetryIntegrity >= 60 ? "PARTIAL" : "SEVERELY INCOMPLETE";
+  const telLabel = state.telemetryIntegrity >= 90 ? "100% COMPLETE" : state.telemetryIntegrity >= 60 ? "70% PARTIAL" : "40% SEVERELY INCOMPLETE";
   const telTextColor = state.telemetryIntegrity >= 90 ? "text-cyber-green-text" : state.telemetryIntegrity >= 60 ? "text-cyber-amber-text" : "text-cyber-red-text";
 
-  const debtSeverity = debt <= 15 ? "LOW" : debt <= 40 ? "MODERATE" : "CRITICAL";
+  const debtSeverity = debt <= 15 ? "LOW UNCERTAINTY" : debt <= 40 ? "MODERATE UNCERTAINTY" : "CRITICAL UNCERTAINTY";
   const debtColor = debt <= 15 ? "text-cyber-green-text" : debt <= 40 ? "text-cyber-amber-text" : "text-cyber-red-text";
   const debtBg = debt <= 15 ? "border-cyber-green/40 bg-cyber-green/5" : debt <= 40 ? "border-cyber-amber/40 bg-cyber-amber/5" : "border-cyber-red/50 bg-cyber-red/5";
 
   const leadingHyp = state.activeHypotheses.find(h => h.status === "leading") ?? state.activeHypotheses[0];
   const otherHyps = state.activeHypotheses.filter(h => h.id !== leadingHyp?.id);
   const topRec = state.recommendedEvidence[0];
-  const otherRecs = state.recommendedEvidence.slice(1);
 
   const scenarioName = state.activeScenario === "alpha"
     ? "Suspected Lateral Movement & Credential Compromise"
@@ -139,7 +110,7 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="space-y-6 max-w-[1400px]">
 
-      {/* ── Demo Controller ── */}
+      {/* ── Guided Demo Controller ── */}
       <DemoController />
 
       {/* ═══ SECTION A: INCIDENT HEADER ═══ */}
@@ -148,7 +119,7 @@ export const Dashboard: React.FC = () => {
           <div className="flex items-center gap-2 mb-2.5">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 border border-cyber-red/40 bg-cyber-red/10 font-mono text-[10px] font-black uppercase tracking-widest text-cyber-red-text">
               <span className="w-1.5 h-1.5 rounded-full bg-cyber-red animate-pulse" />
-              ACTIVE INVESTIGATION
+              ACTIVE INCIDENT INVESTIGATION
             </span>
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 border font-mono text-[10px] font-black uppercase tracking-widest ${completeness < 90 ? "border-cyber-amber/30 bg-cyber-amber/5 text-cyber-amber-text" : "border-cyber-green/30 bg-cyber-green/5 text-cyber-green-text"}`}>
               {completeness < 90 ? "EVIDENCE INCOMPLETE" : "EVIDENCE RESOLVED"}
@@ -159,41 +130,40 @@ export const Dashboard: React.FC = () => {
           </h1>
           <p className="font-mono text-[11px] text-cyber-muted">
             Incident <strong className="text-white">EBHE-0427</strong>
-            {" · "}Network: <strong className="text-white">{segment}</strong>
-            {" · "}Logistics Infrastructure
+            {" · "}Network Segment: <strong className="text-white">{segment}</strong>
+            {" · "}Logistics Subnet
           </p>
         </div>
+
         <div className="flex gap-6 font-mono text-[11px] shrink-0">
           <div className="text-right">
-            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider">First Observed</span>
-            <span className="text-white font-bold mt-0.5 block">14:32:07 UTC</span>
+            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider">LIVE SYSTEM CLOCK</span>
+            <span className="text-cyber-green font-bold text-base block mt-0.5">● {state.currentTimeStr}</span>
           </div>
           <div className="text-right">
-            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider">Last Evidence</span>
-            <span className="text-white font-bold mt-0.5 block">14:41:15 UTC</span>
+            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider">INCIDENT STARTED</span>
+            <span className="text-white font-bold block mt-0.5">{state.incidentStartTimeStr}</span>
           </div>
         </div>
       </div>
 
-      {/* ═══ SECTION B: TELEMETRY INTEGRITY — HERO CONTROL ═══ */}
+      {/* ═══ SECTION B: TELEMETRY INTEGRITY HERO ═══ */}
       <div className="bg-cyber-surface border border-cyber-border/40 p-5 relative">
-        {/* Corner marks */}
-        <div className="absolute top-0 left-0 w-5 h-5 border-t-2 border-l-2 border-cyber-green/40" />
-        <div className="absolute top-0 right-0 w-5 h-5 border-t-2 border-r-2 border-cyber-green/40" />
-        <div className="absolute bottom-0 left-0 w-5 h-5 border-b-2 border-l-2 border-cyber-green/40" />
-        <div className="absolute bottom-0 right-0 w-5 h-5 border-b-2 border-r-2 border-cyber-green/40" />
-
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-4">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-3">
           <div>
-            <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block mb-1">Evidence Source</span>
-            <h3 className="text-white text-base font-black uppercase tracking-wide">TELEMETRY INTEGRITY</h3>
+            <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block mb-1">
+              HOW MUCH EVIDENCE DO WE HAVE?
+            </span>
+            <h3 className="text-white text-base font-black uppercase tracking-wide flex items-center gap-2">
+              TELEMETRY INTEGRITY — {completeness}% AVAILABLE
+            </h3>
             <p className="text-[11px] text-cyber-muted font-sans mt-1 max-w-md">
-              Live sensor stream quality for network segment {segment}. Loss simulates sensor failure or link disruption.
+              Incoming sensor stream quality for {segment}. Triggering telemetry loss simulates network link failure or log blockage.
             </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <span className={`font-mono text-3xl font-black ${telTextColor}`}>{state.telemetryIntegrity}%</span>
-            <span className={`font-mono text-[10px] font-bold uppercase px-2 py-1 border ${telTextColor} ${state.telemetryIntegrity >= 90 ? "border-cyber-green/40 bg-cyber-green/5" : state.telemetryIntegrity >= 60 ? "border-cyber-amber/40 bg-cyber-amber/5" : "border-cyber-red/40 bg-cyber-red/5"}`}>
+            <span className={`font-mono text-[10px] font-bold uppercase px-2.5 py-1 border ${telTextColor} ${state.telemetryIntegrity >= 90 ? "border-cyber-green/40 bg-cyber-green/5" : state.telemetryIntegrity >= 60 ? "border-cyber-amber/40 bg-cyber-amber/5" : "border-cyber-red/40 bg-cyber-red/5"}`}>
               {telLabel}
             </span>
           </div>
@@ -206,18 +176,17 @@ export const Dashboard: React.FC = () => {
             style={{ width: `${state.telemetryIntegrity}%` }}
           />
           <div className="absolute inset-0 flex items-center px-2.5 font-mono text-[9px] font-bold pointer-events-none">
-            <span className="text-white mix-blend-difference">ACTIVE SENSOR STREAM — {state.telemetryIntegrity}% INTEGRITY</span>
+            <span className="text-white mix-blend-difference">LIVE SENSOR STREAM — {state.telemetryIntegrity}% INTEGRITY ({completeness}% AVAILABLE)</span>
           </div>
         </div>
+
         <div className="text-[9px] font-mono text-cyber-muted mb-4">
-          Completeness: <strong className={telTextColor}>{completeness}%</strong>
-          {"   ·   "}
           Critical Gaps: <strong className={state.criticalGaps > 0 ? "text-cyber-red-text" : "text-cyber-green-text"}>{state.criticalGaps}</strong>
           {"   ·   "}
-          Evidence Events: <strong className="text-white">{state.evidenceEvents.length}</strong>
+          Stream Status: <strong className={state.isStreamPaused ? "text-cyber-amber-text" : "text-cyber-green-text"}>{state.isStreamPaused ? "PAUSED" : "CONTINUOUS STREAM ACTIVE"}</strong>
         </div>
 
-        {/* ACTION BUTTONS */}
+        {/* ACTION CONTROL BUTTONS */}
         <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-cyber-border/30">
           <button
             onClick={() => setTelemetryIntegrity(40)}
@@ -234,11 +203,6 @@ export const Dashboard: React.FC = () => {
               RESTORE TO BASELINE
             </button>
           )}
-          {state.telemetryIntegrity !== 100 && (
-            <span className="font-mono text-[9px] text-cyber-muted italic">
-              Telemetry at {state.telemetryIntegrity}% — investigate recommended evidence to resolve uncertainty
-            </span>
-          )}
           {isResolved && (
             <span className="font-mono text-[10px] text-cyber-green-text font-bold">
               ✓ Evidence retrieved — assessment updated
@@ -247,15 +211,18 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* ═══ SECTION C: PRIMARY ASSESSMENT ROW ═══ */}
+      {/* ═══ SECTION C: CURRENT ASSESSMENT & EVIDENCE DEBT ═══ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-        {/* C1: Leading Hypothesis — largest card */}
+        {/* C1: CURRENT ASSESSMENT — LEADING EXPLANATION */}
         <div className="lg:col-span-2 bg-cyber-surface border-2 border-cyber-cyan/30 p-5 relative">
           <div className="absolute top-0 left-0 h-0.5 w-16 bg-cyber-cyan" />
-          <span className="font-mono text-[9px] text-cyber-cyan uppercase tracking-widest block mb-3">
-            LEADING HYPOTHESIS
-          </span>
+          <div className="flex items-center justify-between mb-3">
+            <span className="font-mono text-[9px] text-cyber-cyan uppercase tracking-widest block font-bold">
+              CURRENT ASSESSMENT
+            </span>
+            <span className="font-mono text-[9px] text-cyber-muted italic">SUPPORT IS NOT CONFIRMATION</span>
+          </div>
 
           {leadingHyp ? (
             <>
@@ -264,41 +231,40 @@ export const Dashboard: React.FC = () => {
                   <h2 className="text-white text-xl font-black uppercase tracking-tight leading-tight mb-1.5">
                     {leadingHyp.name}
                   </h2>
-                  <p className="text-[11px] text-cyber-muted font-sans leading-relaxed line-clamp-2">
+                  <p className="text-[11px] text-cyber-muted font-sans leading-relaxed">
                     {leadingHyp.description}
                   </p>
                 </div>
                 <div className="text-right shrink-0">
-                  <span className="block text-[9px] text-cyber-muted font-mono uppercase mb-1">Confidence</span>
+                  <span className="block text-[8px] text-cyber-muted font-mono uppercase mb-0.5">CURRENT SUPPORT</span>
                   <span className="text-5xl font-black text-white leading-none block">{leadingHyp.confidence}%</span>
-                  <span className="font-mono text-[9px] text-cyber-cyan font-bold block mt-1 uppercase">{leadingHyp.status}</span>
+                  <span className="font-mono text-[9px] text-cyber-cyan font-bold block mt-1 uppercase">
+                    {leadingHyp.confidence >= 80 ? "STRONGLY SUPPORTED" : "LEADING EXPLANATION"}
+                  </span>
                 </div>
+              </div>
+
+              {/* FEATURE #1: REASONING TRACE BUTTON */}
+              <div className="my-4 p-3 bg-cyber-bg border border-cyber-cyan/30 flex items-center justify-between gap-4">
+                <div className="text-[11px] text-cyber-text font-sans">
+                  <strong>Why this assessment?</strong> Inspect the 5-step explicit reasoning chain from raw evidence to interpretation.
+                </div>
+                <button
+                  onClick={() => openReasoningTrace(leadingHyp.id)}
+                  className="px-4 py-2 bg-cyber-cyan text-cyber-bg hover:bg-white font-mono text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shrink-0"
+                >
+                  [ WHY THIS ASSESSMENT? ]
+                </button>
               </div>
 
               {/* Mini attack path */}
               <MiniAttackPath steps={leadingHyp.steps} />
 
-              <div className="mt-4 pt-3 border-t border-cyber-border/30 flex items-center justify-between">
-                <div className="font-mono text-[10px] text-cyber-muted">
-                  Evidence: <strong className="text-white">{leadingHyp.supportingEvidence.length}</strong>
-                  {"  ·  "}
-                  Missing: <strong className="text-cyber-amber-text">{leadingHyp.missingEvidence.length}</strong>
-                  {"  ·  "}
-                  Debt: <strong className={debtColor}>{leadingHyp.evidenceDebt}</strong>
-                </div>
-                <button
-                  onClick={() => setDrawerHyp(leadingHyp)}
-                  className="flex items-center gap-1.5 font-mono text-[10px] text-cyber-cyan hover:text-white transition-colors cursor-pointer font-bold"
-                >
-                  VIEW DETAIL <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* Other hypotheses */}
+              {/* OTHER EXPLANATIONS */}
               {otherHyps.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-cyber-border/30">
                   <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-wider block mb-2.5">
-                    OTHER SURVIVING HYPOTHESES
+                    ALTERNATIVE SURVIVING EXPLANATIONS ({otherHyps.length})
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {otherHyps.map(hyp => (
@@ -313,7 +279,7 @@ export const Dashboard: React.FC = () => {
                         </div>
                         <MiniAttackPath steps={hyp.steps.slice(0, 3)} />
                         <span className="font-mono text-[9px] text-cyber-muted/70 mt-2 block group-hover:text-cyber-muted transition-colors">
-                          VIEW DETAIL →
+                          INSPECT EXPLANATION →
                         </span>
                       </button>
                     ))}
@@ -326,27 +292,26 @@ export const Dashboard: React.FC = () => {
           )}
         </div>
 
-        {/* C2: Evidence Debt */}
+        {/* C2: UNCERTAINTY FROM MISSING EVIDENCE (EVIDENCE DEBT) */}
         <div className={`bg-cyber-surface border-2 p-5 relative flex flex-col justify-between ${debtBg}`}>
-          <div className="absolute top-0 right-0 h-0.5 w-16 bg-cyber-amber" />
           <div>
             <div className="flex items-center justify-between mb-3">
               <span className="font-mono text-[9px] uppercase tracking-widest font-bold text-cyber-muted">
-                <Tooltip content="Unresolved uncertainty caused by missing, delayed, contradictory, or insufficient evidence. Higher = less reliable assessment." position="top">
-                  EVIDENCE DEBT
+                <Tooltip content="Unresolved uncertainty caused by incomplete telemetry. Higher score = less reliable assessment." position="top">
+                  UNCERTAINTY FROM MISSING EVIDENCE
                 </Tooltip>
               </span>
               <HelpCircle className="w-3.5 h-3.5 text-cyber-muted/50 cursor-help" />
             </div>
 
-            <div className="mb-4">
-              <div className={`text-7xl font-black leading-none transition-all duration-500 ${debtFlash ? "value-changed" : ""} ${debtColor}`}>
-                {debt}
+            <div className="mb-2">
+              <span className="text-[9px] font-mono text-cyber-muted block uppercase mb-1">Evidence Debt</span>
+              <div className={`text-6xl font-black leading-none transition-all duration-500 ${debtFlash ? "value-changed" : ""} ${debtColor}`}>
+                {debt} <span className="text-sm font-normal text-cyber-muted">/ 100</span>
               </div>
-              <div className="font-mono text-[10px] text-cyber-muted mt-1">/ 100</div>
             </div>
 
-            <div className={`inline-flex items-center gap-1.5 font-mono text-[11px] font-black uppercase px-2.5 py-1 border ${debtColor} ${debt <= 15 ? "border-cyber-green/40 bg-cyber-green/10" : debt <= 40 ? "border-cyber-amber/40 bg-cyber-amber/10" : "border-cyber-red/40 bg-cyber-red/10"}`}>
+            <div className={`inline-flex items-center gap-1.5 font-mono text-[10px] font-black uppercase px-2.5 py-1 border mt-2 ${debtColor} ${debt <= 15 ? "border-cyber-green/40 bg-cyber-green/10" : debt <= 40 ? "border-cyber-amber/40 bg-cyber-amber/10" : "border-cyber-red/40 bg-cyber-red/10"}`}>
               {debtSeverity}
             </div>
 
@@ -356,32 +321,42 @@ export const Dashboard: React.FC = () => {
           <div className="mt-4 pt-4 border-t border-cyber-border/30 space-y-2">
             <p className="text-[10px] text-cyber-muted font-sans leading-relaxed">
               {debt <= 15
-                ? "Assessment is well-supported. No critical gaps."
+                ? "Assessment is well-supported with low uncertainty."
                 : debt <= 40
-                ? "Moderate unresolved conditions. Key evidence gaps exist."
-                : "Critical uncertainty. Assessment may be unreliable."}
+                ? "Moderate unresolved telemetry conditions present."
+                : "Critical uncertainty. Assessment cannot be confirmed without telemetry."}
             </p>
             <button
               onClick={() => setShowDebtBreakdown(v => !v)}
               className="flex items-center gap-1.5 font-mono text-[10px] text-cyber-muted hover:text-white transition-colors cursor-pointer"
             >
-              {showDebtBreakdown ? "HIDE BREAKDOWN" : "VIEW BREAKDOWN"}
+              {showDebtBreakdown ? "HIDE BREAKDOWN" : "VIEW UNCERTAINTY BREAKDOWN"}
               {showDebtBreakdown ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             </button>
           </div>
         </div>
       </div>
 
+      {/* ═══ FEATURE #2: WHAT WOULD CHANGE THIS ASSESSMENT? ═══ */}
+      {leadingHyp && (
+        <FalsificationPanel
+          hypothesis={leadingHyp}
+          onCheckEvidence={() => {
+            if (topRec) investigateLog(topRec.id);
+          }}
+        />
+      )}
+
       {/* ═══ SECTION D: KNOWN / UNRESOLVED ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="p-5 border-l-2 border-cyber-green bg-cyber-surface">
-          <h4 className="font-mono text-[10px] text-cyber-green font-black uppercase tracking-widest mb-4 flex items-center gap-2">
+          <h4 className="font-mono text-[10px] text-cyber-green font-black uppercase tracking-widest mb-3 flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5" />
-            KNOWN — OBSERVED FACTS
+            OBSERVED FACTS — WHAT WE KNOW
           </h4>
-          <ul className="space-y-2.5">
+          <ul className="space-y-2">
             {state.whatWeKnow.map((item, i) => (
-              <li key={i} className="flex items-start gap-3 text-[11px] font-sans">
+              <li key={i} className="flex items-start gap-2.5 text-[11px] font-sans">
                 <span className="text-cyber-green font-mono font-bold shrink-0 mt-0.5">✓</span>
                 <span className="text-cyber-text leading-relaxed">{item.replace(/^✓\s*/, "")}</span>
               </li>
@@ -390,16 +365,16 @@ export const Dashboard: React.FC = () => {
         </div>
 
         <div className="p-5 border-l-2 border-cyber-amber bg-cyber-surface">
-          <h4 className="font-mono text-[10px] text-cyber-amber font-black uppercase tracking-widest mb-4 flex items-center gap-2">
+          <h4 className="font-mono text-[10px] text-cyber-amber font-black uppercase tracking-widest mb-3 flex items-center gap-2">
             <XCircle className="w-3.5 h-3.5" />
-            UNRESOLVED
-            <Tooltip content="Events or relationships EBHE cannot confirm due to missing or insufficient telemetry. Not inferred." position="top">
+            UNRESOLVED — WHAT WE DON'T KNOW
+            <Tooltip content="Events EBHE cannot confirm due to missing telemetry. Not invented." position="top">
               <HelpCircle className="w-3 h-3 text-cyber-muted/60 ml-0.5" />
             </Tooltip>
           </h4>
-          <ul className="space-y-2.5">
+          <ul className="space-y-2">
             {state.whatWeDontKnow.map((item, i) => (
-              <li key={i} className="flex items-start gap-3 text-[11px] font-sans">
+              <li key={i} className="flex items-start gap-2.5 text-[11px] font-sans">
                 <span className="text-cyber-amber font-mono font-bold shrink-0 mt-0.5">?</span>
                 <span className="text-cyber-text leading-relaxed">{item.replace(/^\?\s*/, "")}</span>
               </li>
@@ -408,18 +383,16 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* ═══ SECTION E: NEXT BEST EVIDENCE — ACTION CENTER ═══ */}
+      {/* ═══ SECTION E: WHAT SHOULD WE CHECK NEXT? (ACTION CENTER) ═══ */}
       {topRec && (
-        <div className="bg-cyber-surface border border-cyber-cyan/25 p-5 relative">
-          <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-cyber-cyan/50 to-transparent" />
-
+        <div className="bg-cyber-surface border border-cyber-cyan/30 p-5 relative">
           <div className="flex flex-col md:flex-row items-start gap-6">
             <div className="flex-1 min-w-0">
-              <span className="font-mono text-[9px] text-cyber-cyan uppercase tracking-widest font-black block mb-1.5">
-                NEXT BEST EVIDENCE
+              <span className="font-mono text-[9px] text-cyber-cyan uppercase tracking-widest font-black block mb-1">
+                ACTION RECOMMENDATION
               </span>
-              <h3 className="text-white text-lg font-black uppercase mb-1.5 leading-tight">
-                {topRec.title}
+              <h3 className="text-white text-lg font-black uppercase mb-1 leading-tight">
+                WHAT SHOULD WE CHECK NEXT? — {topRec.title}
               </h3>
               <p className="text-[11px] text-cyber-muted font-sans leading-relaxed mb-3 max-w-xl">
                 {topRec.reason}
@@ -427,16 +400,16 @@ export const Dashboard: React.FC = () => {
 
               <div className="flex flex-wrap items-center gap-4 font-mono text-[10px]">
                 <span className={`font-black uppercase ${topRec.impact === "HIGH" ? "text-cyber-red-text" : "text-cyber-amber-text"}`}>
-                  {topRec.impact} IMPACT
+                  VALUE: {topRec.impact}
                 </span>
                 <span className="text-cyber-muted">
-                  Information Gain:{" "}
-                  <Tooltip content="How strongly this evidence could distinguish between the surviving hypotheses. Higher = more resolving." position="top">
+                  HOW USEFUL WOULD THIS BE?{" "}
+                  <Tooltip content="Expected Information Gain (0.0 to 1.0) — ability to distinguish between surviving hypotheses." position="top">
                     <strong className="text-white border-b border-dashed border-cyber-muted/40">{topRec.informationGain}</strong>
                   </Tooltip>
                 </span>
                 <span className="text-cyber-muted">
-                  Target: <strong className="text-white">{topRec.targetLogSource}</strong>
+                  Target Log: <strong className="text-white">{topRec.targetLogSource}</strong>
                 </span>
               </div>
             </div>
@@ -445,92 +418,106 @@ export const Dashboard: React.FC = () => {
               <button
                 onClick={() => investigateLog(topRec.id)}
                 disabled={isSimulatingInvestigation || !atLoss || isResolved}
-                className="px-6 py-3 bg-cyber-cyan text-cyber-bg font-mono text-[12px] font-black uppercase tracking-wider hover:bg-white transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-w-[200px] text-center"
+                className="px-6 py-3 bg-cyber-cyan text-cyber-bg font-mono text-[12px] font-black uppercase tracking-wider hover:bg-white transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-w-[200px] text-center shadow-md"
               >
                 {isSimulatingInvestigation ? (
                   <span className="flex items-center justify-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" /> RETRIEVING…
+                    <Loader2 className="w-4 h-4 animate-spin" /> RETRIEVING EVIDENCE…
                   </span>
                 ) : isResolved ? (
                   "✓ EVIDENCE RETRIEVED"
                 ) : !atLoss ? (
-                  "SIMULATE LOSS FIRST"
+                  "SIMULATE TELEMETRY LOSS FIRST"
                 ) : (
-                  "INVESTIGATE EVIDENCE"
+                  "CHECK THIS EVIDENCE"
                 )}
               </button>
               <button
                 onClick={() => setActiveView("evidence")}
                 className="flex items-center justify-center gap-1.5 font-mono text-[9px] text-cyber-muted hover:text-white transition-colors cursor-pointer py-1"
               >
-                <ExternalLink className="w-3 h-3" /> VIEW EVIDENCE TIMELINE
+                <ExternalLink className="w-3 h-3" /> VIEW EVIDENCE EXPLORER
               </button>
             </div>
           </div>
-
-          {/* Secondary recommendations */}
-          {otherRecs.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-cyber-border/30 flex flex-wrap gap-x-6 gap-y-2">
-              <span className="font-mono text-[9px] text-cyber-muted uppercase w-full">Also worth checking:</span>
-              {otherRecs.map((rec) => (
-                <button
-                  key={rec.id}
-                  onClick={() => setActiveView("evidence")}
-                  className="font-mono text-[10px] text-cyber-muted hover:text-cyber-cyan transition-colors cursor-pointer flex items-center gap-1.5"
-                >
-                  <AlertCircle className="w-3 h-3" />
-                  {rec.title}
-                  <span className={rec.impact === "HIGH" ? "text-cyber-red-text" : "text-cyber-amber-text"}>({rec.impact})</span>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
-      {/* ═══ SECTION F: LIVE FEED — TERTIARY, COLLAPSIBLE ═══ */}
-      <div className="bg-cyber-surface border border-cyber-border/30">
-        <button
-          onClick={() => setLiveCollapsed(v => !v)}
-          className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer hover:bg-cyber-hover/40 transition-all"
-        >
+      {/* ═══ SECTION F: LIVE SYNTHETIC TELEMETRY STREAM (REAL-TIME ENGINE) ═══ */}
+      <div className="bg-cyber-surface border border-cyber-border/40 p-4">
+        <div className="flex items-center justify-between mb-3 border-b border-cyber-border/30 pb-2">
           <div className="flex items-center gap-2.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyber-green animate-pulse" />
-            <span className="font-mono text-[10px] text-cyber-muted uppercase tracking-wider font-bold">LIVE EVIDENCE STREAM</span>
+            <span className={`w-2 h-2 rounded-full ${state.isStreamPaused ? "bg-cyber-amber" : "bg-cyber-green animate-pulse"}`} />
+            <span className="font-mono text-[10px] text-white uppercase tracking-wider font-bold">
+              REAL-TIME SYNTHETIC TELEMETRY STREAM
+            </span>
+            <span className="font-mono text-[9px] text-cyber-muted">
+              ({state.liveEventsBuffer.length} buffer events)
+            </span>
           </div>
-          <div className="flex items-center gap-2 text-cyber-muted">
-            <span className="font-mono text-[9px]">{liveCollapsed ? "SHOW" : "HIDE"}</span>
-            {liveCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5 rotate-180" />}
-          </div>
-        </button>
 
-        {!liveCollapsed && (
-          <div className="border-t border-cyber-border/30 px-4 pb-3 animate-drop-in">
-            <div className="space-y-1 py-2">
-              {tickerLogs.slice(0, 4).map(log => (
-                <div key={log.id} className={`flex items-start gap-2 font-mono text-[10px] py-0.5 ${log.isAlert ? "text-cyber-amber-text" : "text-cyber-muted"}`}>
-                  <span className="text-cyber-border shrink-0">&gt;</span>
-                  <span className="text-cyber-muted/60 shrink-0">{log.time}</span>
-                  <span className={`shrink-0 ${log.type === "AUTH" ? "text-cyber-cyan/70" : log.type === "PROC" ? "text-cyber-amber/70" : "text-cyber-muted/60"}`}>[{log.type}]</span>
-                  <span className="flex-1">{log.text}</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={togglePauseStream}
+              className={`px-2.5 py-1 border font-mono text-[9px] font-bold uppercase transition-all cursor-pointer flex items-center gap-1 ${
+                state.isStreamPaused
+                  ? "border-cyber-amber text-cyber-amber-text bg-cyber-amber/10"
+                  : "border-cyber-border text-cyber-muted hover:text-white"
+              }`}
+            >
+              {state.isStreamPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+              {state.isStreamPaused ? "RESUME STREAM" : "PAUSE STREAM"}
+            </button>
+
+            <button
+              onClick={clearLiveBuffer}
+              title="Clear visible rolling buffer without erasing investigation history"
+              className="px-2.5 py-1 border border-cyber-border text-cyber-muted hover:text-white font-mono text-[9px] uppercase cursor-pointer"
+            >
+              CLEAR BUFFER
+            </button>
+          </div>
+        </div>
+
+        {/* Live Rolling Stream Table */}
+        <div className="bg-cyber-bg border border-cyber-border/40 h-36 overflow-y-auto font-mono text-[10px]">
+          {state.liveEventsBuffer.length > 0 ? (
+            <div className="p-2 space-y-1">
+              {state.liveEventsBuffer.map((log) => (
+                <div
+                  key={log.id}
+                  className={`flex items-start gap-3 py-1 px-1.5 border-b border-cyber-border/20 ${
+                    log.status === "missing" ? "text-cyber-red-text bg-cyber-red/5" : "text-cyber-text"
+                  }`}
+                >
+                  <span className="text-cyber-green font-bold shrink-0">{log.timestamp}</span>
+                  <span className="text-cyber-cyan/80 font-bold shrink-0 w-16">[{log.type}]</span>
+                  <span className="text-white font-bold shrink-0">{log.source}{log.destination ? ` → ${log.destination}` : ""}</span>
+                  <span className="text-cyber-muted/70 shrink-0">({log.account || "system"})</span>
+                  <span className="flex-1 truncate">{log.description}</span>
+                  <span className={`font-bold shrink-0 text-[9px] uppercase ${
+                    log.status === "verified" ? "text-cyber-green-text" : "text-cyber-red-text"
+                  }`}>
+                    {log.status === "missing" ? "NO TELEMETRY" : "VERIFIED"}
+                  </span>
                 </div>
               ))}
             </div>
-            <button
-              onClick={() => setActiveView("evidence")}
-              className="font-mono text-[9px] text-cyber-cyan hover:underline cursor-pointer mt-1"
-            >
-              VIEW ALL EVIDENCE →
-            </button>
-          </div>
-        )}
+          ) : (
+            <div className="flex items-center justify-center h-full text-cyber-muted font-sans text-xs">
+              No live buffer events. Synthetic telemetry engine generating next event...
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Hypothesis Drawer */}
+      {/* Drawers */}
       <HypothesisDrawer
         hypothesis={drawerHyp}
         onClose={() => setDrawerHyp(null)}
       />
+
+      <ReasoningTraceDrawer />
     </div>
   );
 };

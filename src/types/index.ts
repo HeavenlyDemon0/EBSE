@@ -20,10 +20,11 @@ export type AttackStepStatus =
 
 export interface EvidenceEvent {
   id: string;
-  timestamp: string;
-  type: "AUTH" | "NETWORK" | "PROCESS" | "SYSTEM" | "ENGINE" | "DATA";
+  timestamp: string; // HH:MM:SS format
+  type: "AUTH" | "NETWORK" | "PROCESS" | "SYSTEM" | "ENGINE" | "DATA" | "FILE" | "DNS" | "VPN" | "SESSION";
   source: string;
   destination?: string;
+  account?: string;
   description: string;
   status: EvidenceStatus;
   reliability: number; // 0.0 - 1.0
@@ -41,6 +42,22 @@ export interface AttackStep {
   missingEvidenceReason?: string;
 }
 
+export interface ReasoningStep {
+  stepNumber: number;
+  type: "OBSERVED" | "SUPPORTED" | "UNRESOLVED" | "CURRENT_ASSESSMENT";
+  title: string;
+  description: string;
+  evidenceId?: string;
+  isConfirmed?: boolean;
+}
+
+export interface HypothesisFalsification {
+  wouldStrengthen: string[];
+  wouldWeaken: string[];
+  mostDecisiveEvidence: string;
+  targetLogSource: string;
+}
+
 export interface Hypothesis {
   id: string;
   name: string;
@@ -52,6 +69,8 @@ export interface Hypothesis {
   supportingEvidence: string[]; // Event IDs
   missingEvidence: string[]; // Descriptions of required evidence
   conflictingEvidence: string[]; // Event IDs
+  reasoningTrace?: ReasoningStep[];
+  falsification?: HypothesisFalsification;
 }
 
 export interface EvidenceRecommendation {
@@ -70,6 +89,10 @@ export interface SimulationState {
   evidenceDebt: number; // 0 - 100
   activeHypotheses: Hypothesis[];
   evidenceEvents: EvidenceEvent[];
+  liveEventsBuffer: EvidenceEvent[]; // Rolling 30-60s buffer
+  recentEvents: EvidenceEvent[];
+  archivedEvents: EvidenceEvent[];
+  isStreamPaused: boolean;
   criticalGaps: number;
   selectedHypothesisId: string;
   recommendedEvidence: EvidenceRecommendation[];
@@ -81,4 +104,6 @@ export interface SimulationState {
   presentationMode: boolean;
   demoStep: number; // 1-7
   isDemoActive: boolean;
+  currentTimeStr: string; // Live HH:MM:SS local time
+  incidentStartTimeStr: string;
 }

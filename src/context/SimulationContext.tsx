@@ -1,12 +1,16 @@
 import React, { createContext, useContext, useState, useMemo, useEffect } from "react";
 import type { SimulationState, EvidenceEvent } from "../types";
 import { deriveSimulationState, isRecommendationResolved } from "../engine/simulation";
+import { generateNextSyntheticEvent } from "../engine/telemetryGenerator";
 
 interface SimulationContextProps {
   state: SimulationState;
   activeView: "command-center" | "investigation" | "evidence" | "hypotheses" | "system";
   isSimulatingInvestigation: boolean;
   activeResolvedEvent: EvidenceEvent | null;
+  isReasoningTraceOpen: boolean;
+  selectedReasoningHypothesisId: string | null;
+  selectedSourceEvidenceId: string | null;
   setActiveView: (view: "command-center" | "investigation" | "evidence" | "hypotheses" | "system") => void;
   setTelemetryIntegrity: (level: number) => void;
   switchScenario: (id: "alpha" | "bravo" | "charlie") => void;
@@ -19,6 +23,11 @@ interface SimulationContextProps {
   prevDemoStep: () => void;
   setPresentationMode: (mode: boolean) => void;
   setSelectedHypothesisId: (id: string) => void;
+  togglePauseStream: () => void;
+  clearLiveBuffer: () => void;
+  openReasoningTrace: (hypId?: string) => void;
+  closeReasoningTrace: () => void;
+  setSelectedSourceEvidenceId: (id: string | null) => void;
 }
 
 const SimulationContext = createContext<SimulationContextProps | undefined>(undefined);
@@ -34,6 +43,69 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [activeView, setActiveViewState] = useState<"command-center" | "investigation" | "evidence" | "hypotheses" | "system">("command-center");
   const [isSimulatingInvestigation, setIsSimulatingInvestigation] = useState<boolean>(false);
   const [activeResolvedEvent, setActiveResolvedEvent] = useState<EvidenceEvent | null>(null);
+
+  // Live telemetry stream state
+  const [isStreamPaused, setIsStreamPaused] = useState<boolean>(false);
+  const [liveEventsBuffer, setLiveEventsBuffer] = useState<EvidenceEvent[]>([]);
+  const [recentEvents, setRecentEvents] = useState<EvidenceEvent[]>([]);
+  const [archivedEvents, setArchivedEvents] = useState<EvidenceEvent[]>([]);
+  
+  // Real-time clock state
+  const [currentTimeStr, setCurrentTimeStr] = useState<string>("");
+  const [incidentStartTimeStr, setIncidentStartTimeStr] = useState<string>("");
+
+  // Feature #1: Reasoning Trace Drawer State
+  const [isReasoningTraceOpen, setIsReasoningTraceOpen] = useState<boolean>(false);
+  const [selectedReasoningHypothesisId, setSelectedReasoningHypothesisId] = useState<string | null>(null);
+  const [selectedSourceEvidenceId, setSelectedSourceEvidenceId] = useState<string | null>(null);
+
+  // Initialize clock and initial seeds
+  useEffect(() => {
+    const formatTime = () => {
+      const now = new Date();
+      return now.toLocaleTimeString("en-US", { hour12: false }) + " IST";
+    };
+    const nowStr = formatTime();
+    setCurrentTimeStr(nowStr);
+    setIncidentStartTimeStr(nowStr);
+
+    const clockInterval = setInterval(() => {
+      setCurrentTimeStr(formatTime());
+    }, 1000);
+
+    return () => clearInterval(clockInterval);
+  }, []);
+
+  // Continuous synthetic telemetry engine (1 event per second)
+  useEffect(() => {
+    if (isStreamPaused) return;
+
+    const streamInterval = setInterval(() => {
+      const isLossActive = telemetryIntegrity === 40;
+      const newEvt = generateNextSyntheticEvent(telemetryIntegrity, isLossActive);
+
+      setLiveEventsBuffer((prev) => {
+        const updated = [newEvt, ...prev];
+        // Keep max 40 in live buffer (approx 40 seconds)
+        if (updated.length > 40) {
+          const agingOut = updated.slice(40);
+          setRecentEvents((prevRecent) => {
+            const newRecent = [...agingOut, ...prevRecent];
+            if (newRecent.length > 50) {
+              const toArchive = newRecent.slice(50);
+              setArchivedEvents((prevArch) => [...toArchive, ...prevArch].slice(0, 200));
+              return newRecent.slice(0, 50);
+            }
+            return newRecent;
+          });
+          return updated.slice(0, 40);
+        }
+        return updated;
+      });
+    }, 1200);
+
+    return () => clearInterval(streamInterval);
+  }, [isStreamPaused, telemetryIntegrity]);
 
   // Set default selected hypothesis when scenario changes
   useEffect(() => {
@@ -51,9 +123,29 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       presentationMode,
       demoStep,
       isDemoActive,
-      selectedHypothesisId
+      selectedHypothesisId,
+      liveEventsBuffer,
+      recentEvents,
+      archivedEvents,
+      isStreamPaused,
+      currentTimeStr,
+      incidentStartTimeStr
     });
-  }, [activeScenario, telemetryIntegrity, investigatedLogs, presentationMode, demoStep, isDemoActive, selectedHypothesisId]);
+  }, [
+    activeScenario,
+    telemetryIntegrity,
+    investigatedLogs,
+    presentationMode,
+    demoStep,
+    isDemoActive,
+    selectedHypothesisId,
+    liveEventsBuffer,
+    recentEvents,
+    archivedEvents,
+    isStreamPaused,
+    currentTimeStr,
+    incidentStartTimeStr
+  ]);
 
   // Set active resolved event if state is resolved
   useEffect(() => {
@@ -61,9 +153,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (activeScenario === "alpha") {
         setActiveResolvedEvent({
           id: "DC-03-AUTH",
-          timestamp: "14:36:02",
+          timestamp: new Date().toLocaleTimeString("en-US", { hour12: false }),
           type: "AUTH",
           source: "DC-03",
+          account: "svc_admin",
           description: "Privileged authentication: account 'svc_admin' verified from WS-041",
           status: "verified",
           reliability: 0.98,
@@ -72,10 +165,11 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       } else if (activeScenario === "bravo") {
         setActiveResolvedEvent({
           id: "NET-5512-RESTORED",
-          timestamp: "15:04:40",
+          timestamp: new Date().toLocaleTimeString("en-US", { hour12: false }),
           type: "NETWORK",
           source: "WS-082",
           destination: "LOG-SRV-14",
+          account: "administrator",
           description: "SMB session verified: Authentication success for administrator account",
           status: "verified",
           reliability: 0.94,
@@ -84,9 +178,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       } else if (activeScenario === "charlie") {
         setActiveResolvedEvent({
           id: "DATA-9902-RESTORED",
-          timestamp: "23:44:05",
+          timestamp: new Date().toLocaleTimeString("en-US", { hour12: false }),
           type: "DATA",
           source: "DB-SRV-01",
+          account: "svc_batch",
           description: "Query audit success: SELECT ALL FROM log_routing_table. 18.4GB retrieved.",
           status: "verified",
           reliability: 0.94,
@@ -100,7 +195,6 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const setTelemetryIntegrity = (level: number) => {
     setTelemetryIntegrityState(level);
-    // If telemetry integrity changes, reset investigation if setting back to 100 or 70
     if (level !== 40) {
       setInvestigatedLogs([]);
     }
@@ -117,7 +211,6 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const investigateLog = async (recId: string) => {
     setIsSimulatingInvestigation(true);
-    // Simulate latency of retrieving telemetry from air-gapped system
     await new Promise((resolve) => setTimeout(resolve, 1500));
     setInvestigatedLogs((prev) => [...prev, recId]);
     setIsSimulatingInvestigation(false);
@@ -140,13 +233,15 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (activeScenario === "alpha") setSelectedHypothesisIdState("hyp_alpha_A");
     else if (activeScenario === "bravo") setSelectedHypothesisIdState("hyp_bravo_A");
     else if (activeScenario === "charlie") setSelectedHypothesisIdState("hyp_charlie_A");
+    setLiveEventsBuffer([]);
+    setIsStreamPaused(false);
   };
 
   const setDemoActive = (active: boolean) => {
     setIsDemoActiveState(active);
     if (active) {
       resetDemo();
-      setIsDemoActiveState(true); // resetDemo turns it off, so enable it explicitly
+      setIsDemoActiveState(true);
     }
   };
 
@@ -173,38 +268,35 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const applyDemoStepEffects = (step: number) => {
     switch (step) {
-      case 1: // Baseline
+      case 1:
         setTelemetryIntegrityState(100);
         setInvestigatedLogs([]);
         setActiveViewState("command-center");
         break;
-      case 2: // Telemetry Loss
+      case 2:
         setTelemetryIntegrityState(40);
         setInvestigatedLogs([]);
         setActiveViewState("command-center");
         break;
-      case 3: // Show Uncertainty
-        setTelemetryIntegrityState(40);
-        setInvestigatedLogs([]);
-        setActiveViewState("command-center");
-        // Open leading hypothesis details (default)
-        break;
-      case 4: // Ask what to check
+      case 3:
         setTelemetryIntegrityState(40);
         setInvestigatedLogs([]);
         setActiveViewState("command-center");
         break;
-      case 5: // Simulate Investigate (Triggered on UI or auto-triggered on next step)
-        // Show loading state, but let them trigger or auto resolve on next
-        break;
-      case 6: // Reasoning Update
+      case 4:
         setTelemetryIntegrityState(40);
-        // Force the resolved log injection
+        setInvestigatedLogs([]);
+        setActiveViewState("command-center");
+        break;
+      case 5:
+        break;
+      case 6:
+        setTelemetryIntegrityState(40);
         const token = activeScenario === "alpha" ? "rec_alpha_40_1" : activeScenario === "bravo" ? "rec_bravo_40_1" : "rec_charlie_40_1";
         setInvestigatedLogs([token]);
-        setActiveViewState("investigation"); // Navigate to see the attack graph update!
+        setActiveViewState("investigation");
         break;
-      case 7: // Final Assessment
+      case 7:
         setTelemetryIntegrityState(40);
         setActiveViewState("command-center");
         break;
@@ -225,6 +317,25 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setActiveViewState(view);
   };
 
+  const togglePauseStream = () => {
+    setIsStreamPaused((prev) => !prev);
+  };
+
+  const clearLiveBuffer = () => {
+    setLiveEventsBuffer([]);
+  };
+
+  const openReasoningTrace = (hypId?: string) => {
+    const targetId = hypId || selectedHypothesisId || derivedState.activeHypotheses[0]?.id;
+    setSelectedReasoningHypothesisId(targetId);
+    setIsReasoningTraceOpen(true);
+  };
+
+  const closeReasoningTrace = () => {
+    setIsReasoningTraceOpen(false);
+    setSelectedSourceEvidenceId(null);
+  };
+
   return (
     <SimulationContext.Provider
       value={{
@@ -232,6 +343,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         activeView,
         isSimulatingInvestigation,
         activeResolvedEvent,
+        isReasoningTraceOpen,
+        selectedReasoningHypothesisId,
+        selectedSourceEvidenceId,
         setActiveView,
         setTelemetryIntegrity,
         switchScenario,
@@ -243,7 +357,12 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         nextDemoStep,
         prevDemoStep,
         setPresentationMode,
-        setSelectedHypothesisId
+        setSelectedHypothesisId,
+        togglePauseStream,
+        clearLiveBuffer,
+        openReasoningTrace,
+        closeReasoningTrace,
+        setSelectedSourceEvidenceId
       }}
     >
       {children}
