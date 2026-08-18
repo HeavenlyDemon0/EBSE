@@ -1,532 +1,536 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSimulation } from "../../context/SimulationContext";
 import {
-  AlertCircle, HelpCircle, ChevronRight, CheckCircle2, XCircle,
-  FileText, Terminal, Cpu, Database, ShieldAlert
+  CheckCircle2, XCircle, AlertCircle, ChevronRight,
+  HelpCircle, ChevronDown, Loader2, ExternalLink
 } from "lucide-react";
 import { DemoController } from "../demo/DemoController";
+import { HypothesisDrawer } from "../ui/HypothesisDrawer";
+import { Tooltip } from "../ui/Tooltip";
+import type { Hypothesis } from "../../types";
 
+// ─── Mini attack path for hypothesis card ────────────────────────────────────
+const MiniAttackPath: React.FC<{ steps: Hypothesis["steps"] }> = ({ steps }) => (
+  <div className="flex items-center gap-1 flex-wrap mt-2">
+    {steps.map((step, i) => (
+      <React.Fragment key={step.id}>
+        <span className={`text-[8px] font-mono uppercase px-1.5 py-0.5 border ${
+          step.status === "confirmed" ? "border-cyber-green/30 text-cyber-green-text bg-cyber-green/5"
+          : step.status === "supported" ? "border-cyber-cyan/30 text-cyber-cyan bg-cyber-cyan/5"
+          : step.status === "unverified" ? "border-cyber-amber/30 text-cyber-amber-text bg-cyber-amber/5"
+          : "border-cyber-red/30 text-cyber-red-text bg-cyber-red/5"
+        }`}>
+          {step.name.split(" ")[0]}
+        </span>
+        {i < steps.length - 1 && (
+          <ChevronRight className="w-2.5 h-2.5 text-cyber-border shrink-0" />
+        )}
+      </React.Fragment>
+    ))}
+  </div>
+);
+
+// ─── Evidence Debt "Why?" expandable ─────────────────────────────────────────
+const DebtBreakdown: React.FC<{ debt: number; show: boolean }> = ({ debt, show }) => {
+  if (!show) return null;
+  const missing = Math.round(debt * 0.42);
+  const delayed = Math.round(debt * 0.22);
+  const unverified = Math.round(debt * 0.24);
+  const contradictions = debt - missing - delayed - unverified;
+  return (
+    <div className="mt-3 border-t border-cyber-border/40 pt-3 space-y-1.5 animate-drop-in">
+      <div className="font-mono text-[9px] text-cyber-muted uppercase tracking-wider mb-2">WHY {debt}?</div>
+      {[
+        { label: "Missing events", value: missing, color: "text-cyber-red-text" },
+        { label: "Delayed telemetry", value: delayed, color: "text-cyber-amber-text" },
+        { label: "Unverified relationships", value: unverified, color: "text-cyber-amber-text" },
+        { label: "Contradictions", value: contradictions, color: "text-cyber-red-text" },
+      ].map(item => (
+        <div key={item.label} className="flex items-center justify-between font-mono text-[10px]">
+          <span className="text-cyber-muted">{item.label}</span>
+          <span className={`font-bold ${item.color}`}>+{item.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ─── Main Dashboard ───────────────────────────────────────────────────────────
 export const Dashboard: React.FC = () => {
   const {
     state,
     setActiveView,
     setTelemetryIntegrity,
     investigateLog,
-    restoreDelayedEvidence,
-    setSelectedHypothesisId,
-    isSimulatingInvestigation
+    isSimulatingInvestigation,
   } = useSimulation();
+
+  const [drawerHyp, setDrawerHyp] = useState<Hypothesis | null>(null);
+  const [showDebtBreakdown, setShowDebtBreakdown] = useState(false);
+  const [liveCollapsed, setLiveCollapsed] = useState(true);
+  const [tickerLogs, setTickerLogs] = useState<Array<{ id: number; time: string; type: string; text: string; isAlert: boolean }>>([]);
+  const tickerIdRef = useRef(0);
 
   const prevDebt = useRef(state.evidenceDebt);
   const [debtFlash, setDebtFlash] = useState(false);
 
-  const [tickerLogs, setTickerLogs] = useState<Array<{ id: number; time: string; type: string; text: string; isAlert: boolean }>>([]);
-  const tickerIdRef = useRef(0);
-
-  // Animate Evidence Debt number when it changes
+  // Flash debt when it changes
   useEffect(() => {
     if (prevDebt.current !== state.evidenceDebt) {
       setDebtFlash(true);
-      setTimeout(() => setDebtFlash(false), 600);
+      setTimeout(() => setDebtFlash(false), 700);
       prevDebt.current = state.evidenceDebt;
+      // Auto-collapse breakdown on change
+      setShowDebtBreakdown(false);
     }
   }, [state.evidenceDebt]);
 
-  // Live ticker feed
+  // Live ticker
   useEffect(() => {
     const seed = [
       { type: "AUTH", text: "WS-041 → VPN auth session verified", isAlert: false },
-      { type: "NET", text: "WS-041 → LOG-SRV-12 SMB packet observed", isAlert: false },
+      { type: "NET",  text: "WS-041 → LOG-SRV-12 SMB packet observed", isAlert: false },
       { type: "PROC", text: "PowerShell execution detected on LOG-SRV-12", isAlert: true },
-      { type: "SYS", text: "Telemetry link degradation on subnet MIL-LOG-07", isAlert: true },
+      { type: "SYS",  text: "Telemetry link degradation on subnet MIL-LOG-07", isAlert: true },
       { type: "ENGINE", text: "Hypothesis confidence recalculated", isAlert: false },
     ];
-    const initial = seed.map((s, i) => ({
-      id: i,
-      time: new Date().toISOString().slice(11, 19),
-      ...s
-    }));
-    setTickerLogs(initial);
+    setTickerLogs(seed.map((s, i) => ({ id: i, time: new Date().toISOString().slice(11, 19), ...s })));
     tickerIdRef.current = seed.length;
 
-    const randomItems = [
-      { type: "NET", text: "GATEWAY-01 session packet received", isAlert: false },
-      { type: "AUTH", text: "svc_logistics token validated", isAlert: false },
-      { type: "SYS", text: "Telemetry buffer queue: normal", isAlert: false },
+    const extras = [
+      { type: "NET",    text: "GATEWAY-01 session packet received", isAlert: false },
+      { type: "AUTH",   text: "svc_logistics token validated", isAlert: false },
+      { type: "SYS",    text: "Telemetry buffer queue: normal", isAlert: false },
       { type: "ENGINE", text: "Evidence debt recalculated", isAlert: false },
-      { type: "SYS", text: "Log archive sync: complete", isAlert: false },
     ];
-
     const interval = setInterval(() => {
-      const pick = randomItems[Math.floor(Math.random() * randomItems.length)];
-      const now = new Date().toISOString().slice(11, 19);
-      setTickerLogs(prev => [{ id: tickerIdRef.current++, time: now, ...pick }, ...prev.slice(0, 7)]);
-    }, 4000);
-
+      const pick = extras[Math.floor(Math.random() * extras.length)];
+      setTickerLogs(prev => [{ id: tickerIdRef.current++, time: new Date().toISOString().slice(11,19), ...pick }, ...prev.slice(0, 6)]);
+    }, 4500);
     return () => clearInterval(interval);
   }, []);
 
-  // ─── Derived helpers ───
-  const completeness = state.evidenceCompleteness;
+  // ── Derived values ──
   const debt = state.evidenceDebt;
+  const completeness = state.evidenceCompleteness;
   const isResolved = state.investigatedLogs.length > 0;
+  const atLoss = state.telemetryIntegrity === 40;
 
-  const barColor = completeness >= 90 ? "bg-cyber-green" : completeness >= 60 ? "bg-cyber-amber" : "bg-cyber-red";
-  const completenessLabel = completeness >= 90 ? "COMPLETE" : completeness >= 60 ? "PARTIAL" : "SEVERELY INCOMPLETE";
-  const completenessTextColor = completeness >= 90 ? "text-cyber-green-text" : completeness >= 60 ? "text-cyber-amber-text" : "text-cyber-red-text";
+  const barColor = state.telemetryIntegrity >= 90 ? "bg-cyber-green" : state.telemetryIntegrity >= 60 ? "bg-cyber-amber" : "bg-cyber-red";
+  const telLabel = state.telemetryIntegrity >= 90 ? "COMPLETE" : state.telemetryIntegrity >= 60 ? "PARTIAL" : "SEVERELY INCOMPLETE";
+  const telTextColor = state.telemetryIntegrity >= 90 ? "text-cyber-green-text" : state.telemetryIntegrity >= 60 ? "text-cyber-amber-text" : "text-cyber-red-text";
 
   const debtSeverity = debt <= 15 ? "LOW" : debt <= 40 ? "MODERATE" : "CRITICAL";
-  const debtBorderColor = debt <= 15 ? "border-cyber-green/50 bg-cyber-green/5" : debt <= 40 ? "border-cyber-amber/50 bg-cyber-amber/5" : "border-cyber-red/50 bg-cyber-red/5";
-  const debtTextColor = debt <= 15 ? "text-cyber-green-text" : debt <= 40 ? "text-cyber-amber-text" : "text-cyber-red-text";
+  const debtColor = debt <= 15 ? "text-cyber-green-text" : debt <= 40 ? "text-cyber-amber-text" : "text-cyber-red-text";
+  const debtBg = debt <= 15 ? "border-cyber-green/40 bg-cyber-green/5" : debt <= 40 ? "border-cyber-amber/40 bg-cyber-amber/5" : "border-cyber-red/50 bg-cyber-red/5";
 
-  const confidenceLabel = completeness >= 90 ? "HIGH" : completeness >= 60 ? "MODERATE" : "LOW";
+  const leadingHyp = state.activeHypotheses.find(h => h.status === "leading") ?? state.activeHypotheses[0];
+  const otherHyps = state.activeHypotheses.filter(h => h.id !== leadingHyp?.id);
+  const topRec = state.recommendedEvidence[0];
+  const otherRecs = state.recommendedEvidence.slice(1);
 
-  const handleExportSummary = () => {
-    const leading = state.activeHypotheses.find(h => h.status === 'leading');
-    alert(
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `INVESTIGATION SUMMARY — EBHE-0427\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `Network Segment : ${state.activeScenario === 'alpha' ? 'MIL-LOG-NET-07' : state.activeScenario === 'bravo' ? 'MIL-OPS-NET-09' : 'MIL-SEC-DATA-01'}\n` +
-      `Telemetry State : ${state.telemetryIntegrity}%\n` +
-      `Evidence Debt   : ${debt}/100 (${debtSeverity})\n` +
-      `Completeness    : ${completeness}%\n` +
-      `Active Hyp.     : ${state.activeHypotheses.length}\n\n` +
-      `LEADING HYPOTHESIS\n` +
-      `  ${leading?.name ?? 'None'}\n` +
-      `  Confidence: ${leading?.confidence ?? 0}%\n\n` +
-      `CRITICAL UNRESOLVED\n` +
-      `${state.whatWeDontKnow.map(q => `  ${q}`).join('\n')}\n\n` +
-      `NOTE: No conclusion classified as CONFIRMED\n` +
-      `without direct supporting evidence.\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-    );
-  };
+  const scenarioName = state.activeScenario === "alpha"
+    ? "Suspected Lateral Movement & Credential Compromise"
+    : state.activeScenario === "bravo"
+    ? "Active Subnet Propagation — Service Exploitation"
+    : "Out-of-Hours Database Exfiltration";
+  const segment = state.activeScenario === "alpha" ? "MIL-LOG-NET-07" : state.activeScenario === "bravo" ? "MIL-OPS-NET-09" : "MIL-SEC-DATA-01";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6 max-w-[1400px]">
 
-      {/* Demo walkthrough bar */}
+      {/* ── Demo Controller ── */}
       <DemoController />
 
-      {/* ─── INVESTIGATION HEADER ─── */}
-      <div className="flex flex-col lg:flex-row justify-between items-start gap-3 pb-4 border-b border-cyber-border/40">
+      {/* ═══ SECTION A: INCIDENT HEADER ═══ */}
+      <div className="flex flex-col lg:flex-row justify-between items-start gap-4 pb-5 border-b border-cyber-border/30">
         <div>
-          <div className="flex items-center gap-2.5 mb-2">
-            <span className="status-pill border-cyber-red/40 bg-cyber-red/10 text-cyber-red-text">
+          <div className="flex items-center gap-2 mb-2.5">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 border border-cyber-red/40 bg-cyber-red/10 font-mono text-[10px] font-black uppercase tracking-widest text-cyber-red-text">
               <span className="w-1.5 h-1.5 rounded-full bg-cyber-red animate-pulse" />
               ACTIVE INVESTIGATION
             </span>
-            <span className="status-pill border-cyber-amber/30 bg-cyber-amber/5 text-cyber-amber-text">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 border font-mono text-[10px] font-black uppercase tracking-widest ${completeness < 90 ? "border-cyber-amber/30 bg-cyber-amber/5 text-cyber-amber-text" : "border-cyber-green/30 bg-cyber-green/5 text-cyber-green-text"}`}>
               {completeness < 90 ? "EVIDENCE INCOMPLETE" : "EVIDENCE RESOLVED"}
             </span>
           </div>
-          <h1 className="text-2xl font-black tracking-tight text-white font-sans uppercase leading-tight">
-            {state.activeScenario === 'alpha' ? "Suspected Lateral Movement & Credential Compromise"
-              : state.activeScenario === 'bravo' ? "Active Subnet Propagation — Service Exploitation"
-              : "Out-of-Hours Database Exfiltration"}
+          <h1 className="text-2xl font-black text-white tracking-tight leading-tight uppercase mb-1.5">
+            {scenarioName}
           </h1>
-          <p className="text-[11px] text-cyber-muted mt-1 font-mono">
-            Incident EBHE-0427 · Network: <span className="text-cyber-text font-semibold">{state.activeScenario === 'alpha' ? 'MIL-LOG-NET-07' : state.activeScenario === 'bravo' ? 'MIL-OPS-NET-09' : 'MIL-SEC-DATA-01'}</span> · Logistics Infrastructure
+          <p className="font-mono text-[11px] text-cyber-muted">
+            Incident <strong className="text-white">EBHE-0427</strong>
+            {" · "}Network: <strong className="text-white">{segment}</strong>
+            {" · "}Logistics Infrastructure
           </p>
         </div>
-        <div className="flex flex-wrap items-start gap-6 font-mono text-[11px] shrink-0">
+        <div className="flex gap-6 font-mono text-[11px] shrink-0">
           <div className="text-right">
-            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider mb-0.5">First Observed</span>
-            <span className="text-white font-bold">14:32:07 UTC</span>
+            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider">First Observed</span>
+            <span className="text-white font-bold mt-0.5 block">14:32:07 UTC</span>
           </div>
           <div className="text-right">
-            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider mb-0.5">Last Evidence</span>
-            <span className="text-white font-bold">14:41:15 UTC</span>
-          </div>
-          <div className="text-right">
-            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider mb-0.5">Evidence Completeness</span>
-            <span className={`text-lg font-black ${completenessTextColor}`}>{completeness}%</span>
+            <span className="block text-[9px] text-cyber-muted uppercase tracking-wider">Last Evidence</span>
+            <span className="text-white font-bold mt-0.5 block">14:41:15 UTC</span>
           </div>
         </div>
       </div>
 
-      {/* ─── TOP METRIC STRIP ─── */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {/* ═══ SECTION B: TELEMETRY INTEGRITY — HERO CONTROL ═══ */}
+      <div className="bg-cyber-surface border border-cyber-border/40 p-5 relative">
+        {/* Corner marks */}
+        <div className="absolute top-0 left-0 w-5 h-5 border-t-2 border-l-2 border-cyber-green/40" />
+        <div className="absolute top-0 right-0 w-5 h-5 border-t-2 border-r-2 border-cyber-green/40" />
+        <div className="absolute bottom-0 left-0 w-5 h-5 border-b-2 border-l-2 border-cyber-green/40" />
+        <div className="absolute bottom-0 right-0 w-5 h-5 border-b-2 border-r-2 border-cyber-green/40" />
 
-        <div className="bg-cyber-surface border border-cyber-border/50 p-4">
-          <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block">Active Hypotheses</span>
-          <div className="flex items-end justify-between mt-2">
-            <span className={`text-4xl font-black text-white leading-none transition-all duration-300`}>
-              0{state.activeHypotheses.length}
-            </span>
-            <span className="font-mono text-[9px] text-cyber-muted pb-1">SURVIVING</span>
-          </div>
-        </div>
-
-        <div className="bg-cyber-surface border border-cyber-border/50 p-4">
-          <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block">Evidence Events</span>
-          <div className="flex items-end justify-between mt-2">
-            <span className="text-4xl font-black text-white leading-none">{state.evidenceEvents.length}</span>
-            <span className="font-mono text-[9px] text-cyber-muted pb-1">INGESTED</span>
-          </div>
-        </div>
-
-        <div className="bg-cyber-surface border border-cyber-border/50 p-4">
-          <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block">Evidence Completeness</span>
-          <div className="flex items-end justify-between mt-2">
-            <span className={`text-4xl font-black leading-none transition-all duration-500 ${completenessTextColor}`}>{completeness}%</span>
-            <span className={`font-mono text-[8px] font-bold pb-1 ${completenessTextColor}`}>{completenessLabel}</span>
-          </div>
-        </div>
-
-        {/* EVIDENCE DEBT — THE HERO METRIC */}
-        <div className={`border p-4 transition-all duration-500 ${debtBorderColor} relative`}>
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[9px] uppercase tracking-widest font-bold">Evidence Debt</span>
-            <span title="Unresolved uncertainty caused by missing, delayed, contradictory, or insufficient evidence.">
-              <HelpCircle className="w-3 h-3 opacity-50 cursor-help" />
-            </span>
-          </div>
-          <div className="flex items-end justify-between mt-2">
-            <span className={`text-4xl font-black leading-none transition-all duration-500 ${debtFlash ? 'value-changed' : ''} ${debtTextColor}`}>
-              {debt}
-            </span>
-            <div className="pb-1 text-right">
-              <span className="font-mono text-[9px] text-cyber-muted block">/ 100</span>
-              <span className={`font-mono text-[9px] font-black ${debtTextColor}`}>{debtSeverity}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-cyber-surface border border-cyber-border/50 p-4">
-          <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block">Critical Gaps</span>
-          <div className="flex items-end justify-between mt-2">
-            <span className={`text-4xl font-black leading-none transition-all duration-300 ${state.criticalGaps >= 3 ? 'text-cyber-red-text' : state.criticalGaps >= 1 ? 'text-cyber-amber-text' : 'text-cyber-green-text'}`}>
-              0{state.criticalGaps}
-            </span>
-            <span className="font-mono text-[9px] text-cyber-muted pb-1">MISSING</span>
-          </div>
-        </div>
-
-      </div>
-
-      {/* ─── TELEMETRY INTEGRITY HERO ─── */}
-      <div className="bg-cyber-surface border border-cyber-border/50 p-5 relative">
-        <div className="absolute top-0 left-0 w-6 h-6 border-t border-l border-cyber-green/30" />
-        <div className="absolute top-0 right-0 w-6 h-6 border-t border-r border-cyber-green/30" />
-        <div className="absolute bottom-0 left-0 w-6 h-6 border-b border-l border-cyber-green/30" />
-        <div className="absolute bottom-0 right-0 w-6 h-6 border-b border-r border-cyber-green/30" />
-
-        <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-4">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-4">
           <div>
-            <h3 className="text-white text-sm font-bold tracking-wider font-mono flex items-center gap-2 uppercase">
-              <Database className="w-4 h-4 text-cyber-cyan shrink-0" />
-              TELEMETRY INTEGRITY
-            </h3>
-            <p className="text-[10px] text-cyber-muted mt-0.5 font-sans max-w-lg">
-              Incoming network telemetry represents the evidence available for hypothesis evaluation. Reducing integrity simulates sensor failure, network disruption, or link blockage.
+            <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-widest block mb-1">Evidence Source</span>
+            <h3 className="text-white text-base font-black uppercase tracking-wide">TELEMETRY INTEGRITY</h3>
+            <p className="text-[11px] text-cyber-muted font-sans mt-1 max-w-md">
+              Live sensor stream quality for network segment {segment}. Loss simulates sensor failure or link disruption.
             </p>
           </div>
-          <div className="flex gap-1.5 shrink-0">
-            {[100, 70, 40].map(level => (
-              <button
-                key={level}
-                onClick={() => setTelemetryIntegrity(level)}
-                className={`px-3 py-1.5 font-mono text-[11px] font-bold border transition-all cursor-pointer ${state.telemetryIntegrity === level
-                  ? level === 100 ? 'bg-cyber-green/15 border-cyber-green text-cyber-green-text'
-                  : level === 70 ? 'bg-cyber-amber/15 border-cyber-amber text-cyber-amber-text'
-                  : 'bg-cyber-red/15 border-cyber-red text-cyber-red-text'
-                  : 'border-cyber-border text-cyber-muted hover:border-cyber-muted hover:text-white'}`}
-              >
-                {level}%
-              </button>
-            ))}
+          <div className="flex items-center gap-3 shrink-0">
+            <span className={`font-mono text-3xl font-black ${telTextColor}`}>{state.telemetryIntegrity}%</span>
+            <span className={`font-mono text-[10px] font-bold uppercase px-2 py-1 border ${telTextColor} ${state.telemetryIntegrity >= 90 ? "border-cyber-green/40 bg-cyber-green/5" : state.telemetryIntegrity >= 60 ? "border-cyber-amber/40 bg-cyber-amber/5" : "border-cyber-red/40 bg-cyber-red/5"}`}>
+              {telLabel}
+            </span>
           </div>
         </div>
 
-        {/* Large progress bar */}
-        <div className="mb-3">
-          <div className="h-7 w-full bg-cyber-bg border border-cyber-border overflow-hidden relative">
-            <div
-              className={`h-full transition-all duration-700 ease-in-out ${barColor}`}
-              style={{ width: `${state.telemetryIntegrity}%` }}
-            />
-            {/* Overlay text */}
-            <div className="absolute inset-0 flex items-center justify-between px-3 font-mono text-[10px] font-bold pointer-events-none">
-              <span className="text-white mix-blend-difference">ACTIVE SENSOR STREAM</span>
-              <span className="text-white mix-blend-difference">{state.telemetryIntegrity}% INTEGRITY</span>
-            </div>
-          </div>
-          <div className="flex justify-between text-[9px] font-mono text-cyber-muted mt-1.5">
-            <span>STATUS: <strong className={completenessTextColor}>{completenessLabel}</strong></span>
-            <span>CONFIDENCE INDEX: <strong className={debtTextColor}>{confidenceLabel}</strong></span>
+        {/* Progress bar */}
+        <div className="h-5 w-full bg-cyber-bg border border-cyber-border overflow-hidden relative mb-1.5">
+          <div
+            className={`h-full transition-all duration-700 ease-in-out ${barColor}`}
+            style={{ width: `${state.telemetryIntegrity}%` }}
+          />
+          <div className="absolute inset-0 flex items-center px-2.5 font-mono text-[9px] font-bold pointer-events-none">
+            <span className="text-white mix-blend-difference">ACTIVE SENSOR STREAM — {state.telemetryIntegrity}% INTEGRITY</span>
           </div>
         </div>
+        <div className="text-[9px] font-mono text-cyber-muted mb-4">
+          Completeness: <strong className={telTextColor}>{completeness}%</strong>
+          {"   ·   "}
+          Critical Gaps: <strong className={state.criticalGaps > 0 ? "text-cyber-red-text" : "text-cyber-green-text"}>{state.criticalGaps}</strong>
+          {"   ·   "}
+          Evidence Events: <strong className="text-white">{state.evidenceEvents.length}</strong>
+        </div>
 
-        {/* Action buttons */}
-        <div className="flex flex-wrap gap-2.5 pt-3 border-t border-cyber-border/30">
+        {/* ACTION BUTTONS */}
+        <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-cyber-border/30">
           <button
             onClick={() => setTelemetryIntegrity(40)}
-            className="px-4 py-2 bg-cyber-red/10 border border-cyber-red hover:bg-cyber-red hover:text-cyber-bg transition-all text-cyber-red-text font-mono text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+            disabled={state.telemetryIntegrity === 40}
+            className="px-5 py-2.5 bg-cyber-red/10 border border-cyber-red text-cyber-red-text hover:bg-cyber-red hover:text-white transition-all font-mono text-[11px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            [ SIMULATE TELEMETRY LOSS (40%) ]
+            SIMULATE TELEMETRY LOSS
           </button>
-          <button
-            onClick={restoreDelayedEvidence}
-            disabled={state.telemetryIntegrity !== 40 || isResolved || isSimulatingInvestigation}
-            className="px-4 py-2 bg-cyber-green/10 border border-cyber-green hover:bg-cyber-green hover:text-cyber-bg transition-all text-cyber-green-text font-mono text-[10px] font-bold uppercase tracking-wider cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            {isSimulatingInvestigation ? "[ RETRIEVING EVIDENCE... ]" : "[ RESTORE DELAYED EVIDENCE ]"}
-          </button>
+          {atLoss && !isResolved && (
+            <button
+              onClick={() => setTelemetryIntegrity(100)}
+              className="px-4 py-2.5 border border-cyber-border text-cyber-muted hover:text-white hover:border-cyber-muted transition-all font-mono text-[11px] font-bold uppercase cursor-pointer"
+            >
+              RESTORE TO BASELINE
+            </button>
+          )}
+          {state.telemetryIntegrity !== 100 && (
+            <span className="font-mono text-[9px] text-cyber-muted italic">
+              Telemetry at {state.telemetryIntegrity}% — investigate recommended evidence to resolve uncertainty
+            </span>
+          )}
+          {isResolved && (
+            <span className="font-mono text-[10px] text-cyber-green-text font-bold">
+              ✓ Evidence retrieved — assessment updated
+            </span>
+          )}
         </div>
       </div>
 
-      {/* ─── MAIN TWO-COLUMN GRID ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      {/* ═══ SECTION C: PRIMARY ASSESSMENT ROW ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-        {/* LEFT 2 cols: SURVIVING ATTACK HYPOTHESES */}
-        <div className="lg:col-span-2 space-y-3">
-          <div className="flex items-center justify-between pb-1.5 border-b border-cyber-border/40">
-            <h3 className="text-white text-[11px] font-bold font-mono tracking-wider uppercase flex items-center gap-2">
-              <ShieldAlert className="w-3.5 h-3.5 text-cyber-amber" />
-              SURVIVING ATTACK HYPOTHESES
-            </h3>
-            <span className="font-mono text-[9px] text-cyber-muted italic">CONFIDENCE ≠ CERTAINTY</span>
-          </div>
+        {/* C1: Leading Hypothesis — largest card */}
+        <div className="lg:col-span-2 bg-cyber-surface border-2 border-cyber-cyan/30 p-5 relative">
+          <div className="absolute top-0 left-0 h-0.5 w-16 bg-cyber-cyan" />
+          <span className="font-mono text-[9px] text-cyber-cyan uppercase tracking-widest block mb-3">
+            LEADING HYPOTHESIS
+          </span>
 
-          <div className="space-y-2.5">
-            {state.activeHypotheses.map((hyp) => {
-              const isSelected = state.selectedHypothesisId === hyp.id;
-              const confBar = hyp.confidence;
-
-              return (
-                <div
-                  key={hyp.id}
-                  onClick={() => setSelectedHypothesisId(hyp.id)}
-                  className={`bg-cyber-surface border transition-all cursor-pointer relative overflow-hidden group ${isSelected ? 'border-cyber-cyan/50 shadow-lg shadow-cyber-cyan/5' : 'border-cyber-border/60 hover:border-cyber-border/90'}`}
-                >
-                  {/* Confidence bar stripe */}
-                  <div
-                    className={`absolute bottom-0 left-0 h-0.5 transition-all duration-700 ${hyp.status === 'leading' ? 'bg-cyber-cyan' : hyp.status === 'plausible' ? 'bg-cyber-amber' : 'bg-cyber-border'}`}
-                    style={{ width: `${confBar}%` }}
-                  />
-
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className="font-mono text-[9px] px-1.5 py-0.5 border font-bold uppercase tracking-wider shrink-0 ${statusColor}">
-                            {hyp.status.toUpperCase()}
-                          </span>
-                          <h4 className="text-sm font-black text-white uppercase tracking-wide truncate font-sans">
-                            {hyp.name}
-                          </h4>
-                        </div>
-                        <p className="text-[11px] text-cyber-muted leading-relaxed font-sans pr-4 line-clamp-2">
-                          {hyp.description}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <span className="block text-[8px] text-cyber-muted font-mono uppercase">Confidence</span>
-                        <span className={`text-2xl font-black font-sans leading-tight ${hyp.status === 'leading' ? 'text-white' : hyp.status === 'plausible' ? 'text-cyber-amber-text' : 'text-cyber-muted'}`}>
-                          {hyp.confidence}%
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 pt-2.5 border-t border-cyber-border/20 flex items-center justify-between">
-                      <div className="flex gap-4 font-mono text-[10px]">
-                        <span>
-                          <span className="text-cyber-muted">Evidence: </span>
-                          <strong className="text-white">{hyp.supportingEvidence.length} logs</strong>
-                        </span>
-                        <span>
-                          <span className="text-cyber-muted">Debt: </span>
-                          <strong className={debtTextColor}>{hyp.evidenceDebt}</strong>
-                        </span>
-                        {hyp.missingEvidence.length > 0 && (
-                          <span>
-                            <span className="text-cyber-muted">Missing: </span>
-                            <strong className="text-cyber-amber-text">{hyp.missingEvidence.length}</strong>
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        onClick={e => { e.stopPropagation(); setSelectedHypothesisId(hyp.id); setActiveView("investigation"); }}
-                        className="flex items-center gap-1 font-mono text-[9px] text-cyber-cyan hover:underline cursor-pointer"
-                      >
-                        DEEP DIVE <ChevronRight className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
+          {leadingHyp ? (
+            <>
+              <div className="flex items-start justify-between gap-4 mb-3">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-white text-xl font-black uppercase tracking-tight leading-tight mb-1.5">
+                    {leadingHyp.name}
+                  </h2>
+                  <p className="text-[11px] text-cyber-muted font-sans leading-relaxed line-clamp-2">
+                    {leadingHyp.description}
+                  </p>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* RIGHT 1 col: NEXT BEST EVIDENCE */}
-        <div className="space-y-3">
-          <div className="pb-1.5 border-b border-cyber-border/40">
-            <h3 className="text-white text-[11px] font-bold font-mono tracking-wider uppercase flex items-center gap-2">
-              <AlertCircle className="w-3.5 h-3.5 text-cyber-cyan" />
-              NEXT EVIDENCE TO CHECK
-            </h3>
-          </div>
-
-          <div className="bg-cyber-surface border border-cyber-border/50 p-4 space-y-3">
-            <p className="text-[10px] text-cyber-muted leading-relaxed font-sans border-b border-cyber-border/30 pb-3">
-              Evidence ranked by expected information gain — the ability to distinguish between surviving hypotheses.
-            </p>
-
-            {state.recommendedEvidence.map((rec, i) => (
-              <div
-                key={rec.id}
-                className={`p-3 border transition-all ${i === 0 ? 'border-cyber-cyan/30 bg-cyber-cyan/5' : 'border-cyber-border/40 bg-cyber-bg'}`}
-              >
-                <div className="flex items-start gap-2.5 mb-2">
-                  <span className="font-mono text-[10px] font-black text-cyber-cyan bg-cyber-cyan/10 border border-cyber-cyan/30 px-1.5 py-0.5 shrink-0">
-                    {String(i + 1).padStart(2, '0')}
-                  </span>
-                  <h5 className="font-mono text-[10px] text-white font-bold uppercase leading-tight flex-1">
-                    {rec.title}
-                  </h5>
-                </div>
-
-                <p className="text-[10px] text-cyber-muted leading-relaxed font-sans mb-3">
-                  {rec.reason}
-                </p>
-
-                <div className="flex items-center justify-between text-[9px] font-mono">
-                  <div className="flex items-center gap-3">
-                    <span className={rec.impact === 'HIGH' ? 'text-cyber-red-text font-bold' : 'text-cyber-amber-text font-bold'}>
-                      {rec.impact} IMPACT
-                    </span>
-                    <span className="text-cyber-muted">
-                      GAIN: <strong className="text-white">{rec.informationGain}</strong>
-                    </span>
-                  </div>
-                  {i === 0 && (
-                    <button
-                      onClick={() => investigateLog(rec.id)}
-                      disabled={isSimulatingInvestigation || state.telemetryIntegrity !== 40 || isResolved}
-                      className="px-3 py-1.5 bg-cyber-cyan text-cyber-bg hover:bg-cyber-cyan/90 font-mono text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      {isSimulatingInvestigation ? "RETRIEVING..." : "[ INVESTIGATE ]"}
-                    </button>
-                  )}
+                <div className="text-right shrink-0">
+                  <span className="block text-[9px] text-cyber-muted font-mono uppercase mb-1">Confidence</span>
+                  <span className="text-5xl font-black text-white leading-none block">{leadingHyp.confidence}%</span>
+                  <span className="font-mono text-[9px] text-cyber-cyan font-bold block mt-1 uppercase">{leadingHyp.status}</span>
                 </div>
               </div>
-            ))}
+
+              {/* Mini attack path */}
+              <MiniAttackPath steps={leadingHyp.steps} />
+
+              <div className="mt-4 pt-3 border-t border-cyber-border/30 flex items-center justify-between">
+                <div className="font-mono text-[10px] text-cyber-muted">
+                  Evidence: <strong className="text-white">{leadingHyp.supportingEvidence.length}</strong>
+                  {"  ·  "}
+                  Missing: <strong className="text-cyber-amber-text">{leadingHyp.missingEvidence.length}</strong>
+                  {"  ·  "}
+                  Debt: <strong className={debtColor}>{leadingHyp.evidenceDebt}</strong>
+                </div>
+                <button
+                  onClick={() => setDrawerHyp(leadingHyp)}
+                  className="flex items-center gap-1.5 font-mono text-[10px] text-cyber-cyan hover:text-white transition-colors cursor-pointer font-bold"
+                >
+                  VIEW DETAIL <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Other hypotheses */}
+              {otherHyps.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-cyber-border/30">
+                  <span className="font-mono text-[9px] text-cyber-muted uppercase tracking-wider block mb-2.5">
+                    OTHER SURVIVING HYPOTHESES
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {otherHyps.map(hyp => (
+                      <button
+                        key={hyp.id}
+                        onClick={() => setDrawerHyp(hyp)}
+                        className="text-left p-3 border border-cyber-border/50 hover:border-cyber-border bg-cyber-bg hover:bg-cyber-hover/50 transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <span className="text-[11px] text-white font-bold uppercase font-sans truncate">{hyp.name}</span>
+                          <span className="text-xl font-black text-cyber-amber-text shrink-0 leading-none">{hyp.confidence}%</span>
+                        </div>
+                        <MiniAttackPath steps={hyp.steps.slice(0, 3)} />
+                        <span className="font-mono text-[9px] text-cyber-muted/70 mt-2 block group-hover:text-cyber-muted transition-colors">
+                          VIEW DETAIL →
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-cyber-muted text-sm">No active hypothesis.</p>
+          )}
+        </div>
+
+        {/* C2: Evidence Debt */}
+        <div className={`bg-cyber-surface border-2 p-5 relative flex flex-col justify-between ${debtBg}`}>
+          <div className="absolute top-0 right-0 h-0.5 w-16 bg-cyber-amber" />
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-mono text-[9px] uppercase tracking-widest font-bold text-cyber-muted">
+                <Tooltip content="Unresolved uncertainty caused by missing, delayed, contradictory, or insufficient evidence. Higher = less reliable assessment." position="top">
+                  EVIDENCE DEBT
+                </Tooltip>
+              </span>
+              <HelpCircle className="w-3.5 h-3.5 text-cyber-muted/50 cursor-help" />
+            </div>
+
+            <div className="mb-4">
+              <div className={`text-7xl font-black leading-none transition-all duration-500 ${debtFlash ? "value-changed" : ""} ${debtColor}`}>
+                {debt}
+              </div>
+              <div className="font-mono text-[10px] text-cyber-muted mt-1">/ 100</div>
+            </div>
+
+            <div className={`inline-flex items-center gap-1.5 font-mono text-[11px] font-black uppercase px-2.5 py-1 border ${debtColor} ${debt <= 15 ? "border-cyber-green/40 bg-cyber-green/10" : debt <= 40 ? "border-cyber-amber/40 bg-cyber-amber/10" : "border-cyber-red/40 bg-cyber-red/10"}`}>
+              {debtSeverity}
+            </div>
+
+            <DebtBreakdown debt={debt} show={showDebtBreakdown} />
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-cyber-border/30 space-y-2">
+            <p className="text-[10px] text-cyber-muted font-sans leading-relaxed">
+              {debt <= 15
+                ? "Assessment is well-supported. No critical gaps."
+                : debt <= 40
+                ? "Moderate unresolved conditions. Key evidence gaps exist."
+                : "Critical uncertainty. Assessment may be unreliable."}
+            </p>
+            <button
+              onClick={() => setShowDebtBreakdown(v => !v)}
+              className="flex items-center gap-1.5 font-mono text-[10px] text-cyber-muted hover:text-white transition-colors cursor-pointer"
+            >
+              {showDebtBreakdown ? "HIDE BREAKDOWN" : "VIEW BREAKDOWN"}
+              {showDebtBreakdown ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            </button>
           </div>
         </div>
-
       </div>
 
-      {/* ─── WHAT WE KNOW / WHAT WE DON'T KNOW ─── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <div className="bg-cyber-surface border border-cyber-green/25 p-5 relative">
-          <div className="absolute top-0 left-0 h-0.5 w-12 bg-cyber-green" />
-          <h4 className="text-white text-[11px] font-bold font-mono uppercase tracking-wider mb-3 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-cyber-green" />
-            WHAT WE KNOW — OBSERVED FACTS
+      {/* ═══ SECTION D: KNOWN / UNRESOLVED ═══ */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="p-5 border-l-2 border-cyber-green bg-cyber-surface">
+          <h4 className="font-mono text-[10px] text-cyber-green font-black uppercase tracking-widest mb-4 flex items-center gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            KNOWN — OBSERVED FACTS
           </h4>
-          <ul className="space-y-2">
-            {state.whatWeKnow.map((item, idx) => (
-              <li key={idx} className="flex items-start gap-2.5 text-[11px] text-cyber-text font-sans leading-relaxed">
-                <span className="text-cyber-green font-bold font-mono shrink-0 mt-0.5">✓</span>
-                <span>{item.replace(/^✓\s*/, '')}</span>
+          <ul className="space-y-2.5">
+            {state.whatWeKnow.map((item, i) => (
+              <li key={i} className="flex items-start gap-3 text-[11px] font-sans">
+                <span className="text-cyber-green font-mono font-bold shrink-0 mt-0.5">✓</span>
+                <span className="text-cyber-text leading-relaxed">{item.replace(/^✓\s*/, "")}</span>
               </li>
             ))}
           </ul>
         </div>
 
-        <div className="bg-cyber-surface border border-cyber-amber/25 p-5 relative">
-          <div className="absolute top-0 left-0 h-0.5 w-12 bg-cyber-amber" />
-          <h4 className="text-white text-[11px] font-bold font-mono uppercase tracking-wider mb-3 flex items-center gap-2">
-            <XCircle className="w-4 h-4 text-cyber-amber" />
-            WHAT WE DON'T KNOW — UNCERTAINTY GAPS
+        <div className="p-5 border-l-2 border-cyber-amber bg-cyber-surface">
+          <h4 className="font-mono text-[10px] text-cyber-amber font-black uppercase tracking-widest mb-4 flex items-center gap-2">
+            <XCircle className="w-3.5 h-3.5" />
+            UNRESOLVED
+            <Tooltip content="Events or relationships EBHE cannot confirm due to missing or insufficient telemetry. Not inferred." position="top">
+              <HelpCircle className="w-3 h-3 text-cyber-muted/60 ml-0.5" />
+            </Tooltip>
           </h4>
-          <ul className="space-y-2">
-            {state.whatWeDontKnow.map((item, idx) => (
-              <li key={idx} className="flex items-start gap-2.5 text-[11px] text-cyber-text font-sans leading-relaxed">
-                <span className="text-cyber-amber font-bold font-mono shrink-0 mt-0.5">?</span>
-                <span>{item.replace(/^\?\s*/, '')}</span>
+          <ul className="space-y-2.5">
+            {state.whatWeDontKnow.map((item, i) => (
+              <li key={i} className="flex items-start gap-3 text-[11px] font-sans">
+                <span className="text-cyber-amber font-mono font-bold shrink-0 mt-0.5">?</span>
+                <span className="text-cyber-text leading-relaxed">{item.replace(/^\?\s*/, "")}</span>
               </li>
             ))}
           </ul>
         </div>
       </div>
 
-      {/* ─── BOTTOM ROW: LIVE STREAM + SYSTEM ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      {/* ═══ SECTION E: NEXT BEST EVIDENCE — ACTION CENTER ═══ */}
+      {topRec && (
+        <div className="bg-cyber-surface border border-cyber-cyan/25 p-5 relative">
+          <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-cyber-cyan/50 to-transparent" />
 
-        {/* Live stream */}
-        <div className="lg:col-span-2 bg-cyber-surface border border-cyber-border/40 p-4">
-          <h4 className="text-[10px] text-cyber-muted font-mono font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
-            <Terminal className="w-3.5 h-3.5" />
-            LIVE AIR-GAPPED EVIDENCE STREAM
-          </h4>
-          <div className="bg-cyber-bg border border-cyber-border/40 h-36 overflow-hidden">
-            <div className="p-2 space-y-1">
-              {tickerLogs.map(log => (
-                <div
-                  key={log.id}
-                  className={`flex items-start gap-2 font-mono text-[10px] py-0.5 px-1 animate-drop-in ${log.isAlert ? 'text-cyber-amber-text' : 'text-cyber-muted'}`}
-                >
-                  <span className="text-cyber-cyan/60 shrink-0">&gt;&gt;</span>
-                  <span className="text-cyber-muted/60 shrink-0">{log.time}</span>
-                  <span className={`shrink-0 font-semibold ${log.type === 'AUTH' ? 'text-cyber-cyan/70' : log.type === 'PROC' ? 'text-cyber-amber/70' : 'text-cyber-muted/60'}`}>
-                    [{log.type}]
+          <div className="flex flex-col md:flex-row items-start gap-6">
+            <div className="flex-1 min-w-0">
+              <span className="font-mono text-[9px] text-cyber-cyan uppercase tracking-widest font-black block mb-1.5">
+                NEXT BEST EVIDENCE
+              </span>
+              <h3 className="text-white text-lg font-black uppercase mb-1.5 leading-tight">
+                {topRec.title}
+              </h3>
+              <p className="text-[11px] text-cyber-muted font-sans leading-relaxed mb-3 max-w-xl">
+                {topRec.reason}
+              </p>
+
+              <div className="flex flex-wrap items-center gap-4 font-mono text-[10px]">
+                <span className={`font-black uppercase ${topRec.impact === "HIGH" ? "text-cyber-red-text" : "text-cyber-amber-text"}`}>
+                  {topRec.impact} IMPACT
+                </span>
+                <span className="text-cyber-muted">
+                  Information Gain:{" "}
+                  <Tooltip content="How strongly this evidence could distinguish between the surviving hypotheses. Higher = more resolving." position="top">
+                    <strong className="text-white border-b border-dashed border-cyber-muted/40">{topRec.informationGain}</strong>
+                  </Tooltip>
+                </span>
+                <span className="text-cyber-muted">
+                  Target: <strong className="text-white">{topRec.targetLogSource}</strong>
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 shrink-0 self-start md:self-center">
+              <button
+                onClick={() => investigateLog(topRec.id)}
+                disabled={isSimulatingInvestigation || !atLoss || isResolved}
+                className="px-6 py-3 bg-cyber-cyan text-cyber-bg font-mono text-[12px] font-black uppercase tracking-wider hover:bg-white transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed min-w-[200px] text-center"
+              >
+                {isSimulatingInvestigation ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" /> RETRIEVING…
                   </span>
+                ) : isResolved ? (
+                  "✓ EVIDENCE RETRIEVED"
+                ) : !atLoss ? (
+                  "SIMULATE LOSS FIRST"
+                ) : (
+                  "INVESTIGATE EVIDENCE"
+                )}
+              </button>
+              <button
+                onClick={() => setActiveView("evidence")}
+                className="flex items-center justify-center gap-1.5 font-mono text-[9px] text-cyber-muted hover:text-white transition-colors cursor-pointer py-1"
+              >
+                <ExternalLink className="w-3 h-3" /> VIEW EVIDENCE TIMELINE
+              </button>
+            </div>
+          </div>
+
+          {/* Secondary recommendations */}
+          {otherRecs.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-cyber-border/30 flex flex-wrap gap-x-6 gap-y-2">
+              <span className="font-mono text-[9px] text-cyber-muted uppercase w-full">Also worth checking:</span>
+              {otherRecs.map((rec) => (
+                <button
+                  key={rec.id}
+                  onClick={() => setActiveView("evidence")}
+                  className="font-mono text-[10px] text-cyber-muted hover:text-cyber-cyan transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <AlertCircle className="w-3 h-3" />
+                  {rec.title}
+                  <span className={rec.impact === "HIGH" ? "text-cyber-red-text" : "text-cyber-amber-text"}>({rec.impact})</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ SECTION F: LIVE FEED — TERTIARY, COLLAPSIBLE ═══ */}
+      <div className="bg-cyber-surface border border-cyber-border/30">
+        <button
+          onClick={() => setLiveCollapsed(v => !v)}
+          className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer hover:bg-cyber-hover/40 transition-all"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyber-green animate-pulse" />
+            <span className="font-mono text-[10px] text-cyber-muted uppercase tracking-wider font-bold">LIVE EVIDENCE STREAM</span>
+          </div>
+          <div className="flex items-center gap-2 text-cyber-muted">
+            <span className="font-mono text-[9px]">{liveCollapsed ? "SHOW" : "HIDE"}</span>
+            {liveCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5 rotate-180" />}
+          </div>
+        </button>
+
+        {!liveCollapsed && (
+          <div className="border-t border-cyber-border/30 px-4 pb-3 animate-drop-in">
+            <div className="space-y-1 py-2">
+              {tickerLogs.slice(0, 4).map(log => (
+                <div key={log.id} className={`flex items-start gap-2 font-mono text-[10px] py-0.5 ${log.isAlert ? "text-cyber-amber-text" : "text-cyber-muted"}`}>
+                  <span className="text-cyber-border shrink-0">&gt;</span>
+                  <span className="text-cyber-muted/60 shrink-0">{log.time}</span>
+                  <span className={`shrink-0 ${log.type === "AUTH" ? "text-cyber-cyan/70" : log.type === "PROC" ? "text-cyber-amber/70" : "text-cyber-muted/60"}`}>[{log.type}]</span>
                   <span className="flex-1">{log.text}</span>
                 </div>
               ))}
             </div>
+            <button
+              onClick={() => setActiveView("evidence")}
+              className="font-mono text-[9px] text-cyber-cyan hover:underline cursor-pointer mt-1"
+            >
+              VIEW ALL EVIDENCE →
+            </button>
           </div>
-        </div>
-
-        {/* System Status & Export */}
-        <div className="bg-cyber-surface border border-cyber-border/40 p-4 space-y-3">
-          <h4 className="text-[10px] text-cyber-muted font-mono font-bold uppercase tracking-wider flex items-center gap-2">
-            <Cpu className="w-3.5 h-3.5" />
-            SYSTEM STATUS
-          </h4>
-
-          <div className="grid grid-cols-2 gap-2 font-mono text-[9px]">
-            {[
-              { label: "EBHE ENGINE", value: "OPERATIONAL", color: "text-cyber-green" },
-              { label: "LOCAL PROCESSING", value: "ACTIVE", color: "text-cyber-green" },
-              { label: "EXT. CONNECTIVITY", value: "DISCONNECTED", color: "text-cyber-red" },
-              { label: "SIMULATION MODE", value: "ACTIVE", color: "text-cyber-cyan" },
-            ].map(item => (
-              <div key={item.label} className="bg-cyber-bg border border-cyber-border/40 p-2">
-                <span className="text-cyber-muted/70 text-[8px] block uppercase">{item.label}</span>
-                <span className={`font-bold ${item.color} text-[9px]`}>● {item.value}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Investigation Summary */}
-          <div className="bg-cyber-bg border border-cyber-border/40 p-3 text-[10px] font-sans space-y-1.5">
-            <div className="font-mono text-[9px] text-cyber-muted uppercase font-bold border-b border-cyber-border/30 pb-1.5 mb-1.5">
-              CURRENT ASSESSMENT
-            </div>
-            <p className="text-cyber-text leading-relaxed">
-              {state.activeHypotheses.find(h => h.status === 'leading')?.name || 'No leading hypothesis'} remains the leading hypothesis.
-            </p>
-            <div className="pt-1 border-t border-cyber-border/30 mt-2 text-[9px] font-mono text-cyber-muted italic">
-              No conclusion is classified as confirmed without direct supporting evidence.
-            </div>
-          </div>
-
-          <button
-            onClick={handleExportSummary}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border border-cyber-border hover:border-cyber-muted text-cyber-text font-mono text-[10px] font-bold uppercase transition-all cursor-pointer bg-cyber-bg hover:bg-cyber-hover"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            EXPORT INVESTIGATION SUMMARY
-          </button>
-        </div>
-
+        )}
       </div>
 
+      {/* Hypothesis Drawer */}
+      <HypothesisDrawer
+        hypothesis={drawerHyp}
+        onClose={() => setDrawerHyp(null)}
+      />
     </div>
   );
 };
